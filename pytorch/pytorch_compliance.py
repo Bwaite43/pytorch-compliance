@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -107,12 +106,10 @@ class ControlEmbeddingNetwork(nn.Module):
         
         self.encoder = nn.Sequential(
             nn.Linear(input_size, 512),
-            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.3),
             
             nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.3),
             
@@ -131,17 +128,14 @@ class StatusPredictionNetwork(nn.Module):
         
         self.classifier = nn.Sequential(
             nn.Linear(input_size, 256),
-            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.4),
             
             nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.3),
             
             nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.2),
             
@@ -259,7 +253,7 @@ class PyTorchComplianceAnalyzer:
         
         return self.dataset
     
-    def train_embedding_model(self, embedding_dim=128, epochs=100, batch_size=32, learning_rate=0.001):
+    def train_embedding_model(self, embedding_dim=128, epochs=100, batch_size=16, learning_rate=0.001):
         """Train the control embedding model"""
         
         if self.dataset is None:
@@ -271,8 +265,8 @@ class PyTorchComplianceAnalyzer:
         input_size = self.dataset.features.shape[1]
         self.embedding_model = ControlEmbeddingNetwork(input_size, embedding_dim).to(self.device)
         
-        # Data loader
-        dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
+        # Data loader with drop_last=True to avoid batch size 1
+        dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True, drop_last=True)
         
         # Optimizer
         optimizer = optim.Adam(self.embedding_model.parameters(), lr=learning_rate)
@@ -679,10 +673,10 @@ def main():
     
     # Train models
     print("\n🏋️  Training embedding model...")
-    analyzer.train_embedding_model(embedding_dim=128, epochs=100)
+    analyzer.train_embedding_model(embedding_dim=128, epochs=50)
     
     print("\n🎯 Training status prediction model...")
-    analyzer.train_status_prediction_model(epochs=100)
+    analyzer.train_status_prediction_model(epochs=50)
     
     # Example analyses
     print("\n" + "="*60)
@@ -690,11 +684,22 @@ def main():
     print("="*60)
     
     # 1. Find similar controls
-    print("\n🔍 Finding controls similar to AC-1:")
-    similar_controls = analyzer.find_similar_controls('AC-1', top_k=5, cross_framework_only=True)
+    print("\n🔍 Finding controls similar to AC-02:")  # Use actual control ID format
+    similar_controls = analyzer.find_similar_controls('AC-02', top_k=5, cross_framework_only=True)
     for i, ctrl in enumerate(similar_controls, 1):
         print(f"  {i}. {ctrl['control_id']} ({ctrl['framework']}) - {ctrl['similarity_score']:.3f}")
         print(f"     {ctrl['description']}")
+    
+    # If AC-02 doesn't work, try the first available control
+    if not similar_controls:
+        print("  Trying first available GovRAMP control...")
+        first_control = analyzer.controls_df[analyzer.controls_df['framework'] == 'GovRAMP']['control_id'].iloc[0]
+        print(f"  Using {first_control} instead:")
+        similar_controls = analyzer.find_similar_controls(first_control, top_k=5, cross_framework_only=True)
+        for i, ctrl in enumerate(similar_controls, 1):
+            print(f"  {i}. {ctrl['control_id']} ({ctrl['framework']}) - {ctrl['similarity_score']:.3f}")
+            print(f"     {ctrl['description']}")
+
     
     # 2. Framework mapping
     print(f"\n🗺️  GovRAMP to NIST mapping (top 5):")
@@ -705,20 +710,34 @@ def main():
     
     # 3. Gap analysis example
     print(f"\n❌ Compliance gap analysis:")
-    implemented = ['AC-1', 'AC-2', 'AU-1', 'AU-2']  # Example implemented controls
-    gaps = analyzer.analyze_compliance_gaps(implemented, 'NIST')
+    # Use actual control IDs from your data - check what's available first
+    available_govramp_controls = analyzer.controls_df[
+        analyzer.controls_df['framework'] == 'GovRAMP'
+    ]['control_id'].tolist()[:10]  # Get first 10 actual controls
+    
+    print(f"  Available GovRAMP controls: {available_govramp_controls[:5]}...")
+    
+    gaps = analyzer.analyze_compliance_gaps(available_govramp_controls, 'NIST')
     print(f"  Coverage: {gaps['coverage_percentage']:.1f}%")
-    print(f"  Missing controls: {gaps['gap_controls'][:5]}...")  # Show first 5
+    print(f"  Missing controls: {gaps['gaps'][:5] if gaps['gaps'] else 'None'}...")  # Show first 5
     
     # 4. Status prediction example
-    print(f"\n🎯 Status prediction for SC-1:")
-    prediction = analyzer.predict_implementation_status('SC-1')
+    print(f"\n🎯 Status prediction:")
+    # Use an actual control ID from the dataset
+    first_control = analyzer.controls_df[analyzer.controls_df['framework'] == 'GovRAMP']['control_id'].iloc[0]
+    print(f"  Predicting status for {first_control}:")
+    prediction = analyzer.predict_implementation_status(first_control)
     if prediction:
         print(f"  Predicted: {prediction['predicted_status']} ({prediction['confidence']:.2f} confidence)")
+        print(f"  Probability distribution:")
+        for status, prob in prediction['probability_distribution'].items():
+            print(f"    {status}: {prob:.3f}")
+    else:
+        print("  Prediction failed")
     
     # 5. Generate full report
     print(f"\n📋 Generating comprehensive report...")
-    report = analyzer.generate_compliance_report(implemented)
+    report = analyzer.generate_compliance_report(available_govramp_controls)
     
     print("\n✅ Analysis complete!")
     print("📄 Files generated:")
