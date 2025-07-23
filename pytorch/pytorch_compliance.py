@@ -194,49 +194,74 @@ class PyTorchComplianceAnalyzer:
     def _standardize_nist_columns(self, nist_df: pd.DataFrame) -> pd.DataFrame:
         """Standardize NIST DataFrame columns to match GovRAMP format"""
         
-        # Common NIST column mappings
-        nist_mapping = {
-            'Control Identifier': 'control_id',
-            'Control Name': 'description',
-            'Control Text': 'guidance',
-            'Discussion': 'guidance',
-            'Related Controls': 'related_controls'
-        }
+        print(f"🔧 Standardizing NIST columns...")
+        print(f"📋 Original NIST columns: {list(nist_df.columns)}")
         
-        # Apply mappings
-        nist_standardized = nist_df.copy()
-        for old_col, new_col in nist_mapping.items():
-            if old_col in nist_standardized.columns:
-                nist_standardized = nist_standardized.rename(columns={old_col: new_col})
+        # Create standardized dataframe
+        nist_standardized = pd.DataFrame()
         
-        # Add missing columns with defaults
-        required_columns = ['control_id', 'framework', 'description', 'guidance', 'combined_text', 
-                          'priority', 'implementation_status', 'control_family', 'combined_text_length']
+        # Map actual NIST columns to our standard format
+        if 'identifier' in nist_df.columns:
+            nist_standardized['control_id'] = nist_df['identifier']
+        elif 'Control Identifier' in nist_df.columns:
+            nist_standardized['control_id'] = nist_df['Control Identifier']
+        else:
+            # Use first column as fallback
+            nist_standardized['control_id'] = nist_df.iloc[:, 0]
         
-        for col in required_columns:
-            if col not in nist_standardized.columns:
-                if col == 'framework':
-                    nist_standardized[col] = 'NIST'
-                elif col == 'priority':
-                    nist_standardized[col] = 'Moderate'
-                elif col == 'implementation_status':
-                    nist_standardized[col] = 'Not Implemented'
-                elif col == 'control_family':
-                    nist_standardized[col] = nist_standardized.get('control_id', '').apply(
-                        lambda x: x.split('-')[0] if isinstance(x, str) and '-' in x else 'Unknown'
-                    )
-                elif col == 'combined_text':
-                    # Combine available text fields
-                    text_cols = ['description', 'guidance']
-                    nist_standardized[col] = nist_standardized[text_cols].fillna('').apply(
-                        lambda row: ' '.join([str(val) for val in row if val]), axis=1
-                    )
-                elif col == 'combined_text_length':
-                    nist_standardized[col] = nist_standardized.get('combined_text', '').str.len()
-                else:
-                    nist_standardized[col] = ''
+        # Description from name column
+        if 'name' in nist_df.columns:
+            nist_standardized['description'] = nist_df['name']
+        elif 'Control Name' in nist_df.columns:
+            nist_standardized['description'] = nist_df['Control Name']
+        else:
+            nist_standardized['description'] = 'NIST Control'
         
-        return nist_standardized[required_columns]
+        # Guidance from control_text and discussion
+        guidance_parts = []
+        text_columns = ['control_text', 'discussion']
+        
+        for _, row in nist_df.iterrows():
+            text_parts = []
+            
+            # Combine control_text and discussion
+            for col in text_columns:
+                if col in nist_df.columns and pd.notna(row[col]) and str(row[col]).strip():
+                    text_parts.append(str(row[col]).strip())
+            
+            # If no text found, use name/description
+            if not text_parts:
+                name_val = row.get('name', row.get('Control Name', ''))
+                if pd.notna(name_val) and str(name_val).strip():
+                    text_parts.append(str(name_val).strip())
+            
+            combined_text = ' '.join(text_parts) if text_parts else 'NIST Control'
+            guidance_parts.append(combined_text)
+        
+        nist_standardized['guidance'] = guidance_parts
+        nist_standardized['combined_text'] = guidance_parts
+        
+        # Add required columns with defaults
+        nist_standardized['framework'] = 'NIST'
+        nist_standardized['priority'] = 'Medium'
+        nist_standardized['implementation_status'] = 'Not Implemented'
+        
+        # Extract control family from control_id (AC-1 -> AC)
+        nist_standardized['control_family'] = nist_standardized['control_id'].apply(
+            lambda x: x.split('-')[0] if isinstance(x, str) and '-' in x else 'Unknown'
+        )
+        
+        # Text length
+        nist_standardized['combined_text_length'] = nist_standardized['combined_text'].str.len()
+        
+        # Remove rows with missing control_id
+        nist_standardized = nist_standardized.dropna(subset=['control_id'])
+        nist_standardized = nist_standardized[nist_standardized['control_id'] != '']
+        
+        print(f"✅ Standardized {len(nist_standardized)} NIST controls")
+        print(f"📊 NIST control families: {nist_standardized['control_family'].value_counts().head().to_dict()}")
+        
+        return nist_standardized
     
     def prepare_dataset(self):
         """Prepare PyTorch dataset from loaded data"""
